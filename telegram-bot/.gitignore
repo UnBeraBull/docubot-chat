@@ -1,0 +1,5 @@
+node_modules/
+.env
+data/
+# uncomment if your docs are private and not part of this repo
+# docs/
