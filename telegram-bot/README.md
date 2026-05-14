@@ -5,6 +5,22 @@ Markdown documentation using **Groq** for chat completions and a local
 **vector index** (RAG) for retrieval. No public URL needed — uses Telegram
 long-polling.
 
+## Quick bootstrap (fresh Ubuntu/Debian VPS)
+
+```bash
+cd telegram-bot
+chmod +x bootstrap.sh
+./bootstrap.sh
+```
+
+The script installs Node.js 20 + pm2, installs dependencies, builds the
+vector index, and starts the bot under pm2. If `.env` or your `docs/`
+folder isn't ready yet, it stops with a clear message and you re-run
+the same command after fixing it. Re-running is always safe.
+
+The manual steps below are for non-Debian systems or if you prefer to
+do it by hand.
+
 ## Requirements
 
 - Node.js 18.17+
