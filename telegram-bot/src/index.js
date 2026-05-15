@@ -24,6 +24,41 @@ Rules:
 - If the CONTEXT contains URLs (http:// or https://), you may include them verbatim when they are genuinely useful to the user.
 - If the user asks something off-topic, gently steer them back to the documentation without naming any source.`;
 
+// Remove filename/path citations from model output while preserving URLs.
+// Strategy: temporarily replace http(s) URLs with placeholders, scrub
+// filename-looking tokens and "(see: ...)" style citations, then restore URLs.
+function sanitizeReply(text) {
+  if (!text) return text;
+
+  const urls = [];
+  let out = text.replace(/https?:\/\/[^\s)>\]]+/gi, (m) => {
+    urls.push(m);
+    return `\u0000URL${urls.length - 1}\u0000`;
+  });
+
+  // Drop parenthetical/bracketed citations that mention a file or "see: ..."
+  // e.g. "(see: 4-what-we-are-building.md)", "[source: foo.md]", "(4-foo.md)"
+  out = out.replace(/[\s]*[\(\[][^()\[\]]*?(?:see\s*:|source\s*:|\.(?:md|markdown|txt|pdf|docx?|json|ya?ml|html?))[^()\[\]]*?[\)\]]/gi, "");
+
+  // Drop bare "see: filename.ext" or "source: filename.ext" fragments
+  out = out.replace(/\b(?:see|source|ref(?:erence)?)\s*:\s*[^\s,.;:]+\.(?:md|markdown|txt|pdf|docx?|json|ya?ml|html?)\b/gi, "");
+
+  // Drop any remaining standalone filenames/paths with a known doc extension
+  out = out.replace(/(?:[A-Za-z0-9_\-./]+\/)?[A-Za-z0-9_\-.]+\.(?:md|markdown|txt|pdf|docx?|json|ya?ml|html?)\b/gi, "");
+
+  // Tidy leftover punctuation/whitespace from removals
+  out = out
+    .replace(/\(\s*[,;:\-]?\s*\)/g, "")
+    .replace(/\[\s*[,;:\-]?\s*\]/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+([,.;:!?])/g, "$1")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  out = out.replace(/\u0000URL(\d+)\u0000/g, (_, i) => urls[Number(i)] ?? "");
+  return out;
+}
+
 function buildContextBlock(hits) {
   return hits
     .map((h, i) => {
@@ -52,11 +87,12 @@ async function answer(chatId, userText, index, botUsername) {
     { role: "user", content: q },
   ];
 
-  const reply = await groqChat({
+  const rawReply = await groqChat({
     messages,
     model: GROQ_MODEL,
     apiKey: GROQ_API_KEY,
   });
+  const reply = sanitizeReply(rawReply);
   appendTurn(chatId, q, reply, MEMORY_TURNS);
   return reply;
 }
