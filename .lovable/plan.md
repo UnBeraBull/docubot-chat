@@ -1,37 +1,49 @@
-## Add `telegram-bot/bootstrap.sh`
+## Goal
 
-A one-shot script for fresh Ubuntu/Debian VPSes that installs Node.js, installs npm dependencies, and (if `.env` and docs are ready) builds the index and starts the bot under pm2.
+Stop the bot from ever citing source `.md` filenames, while still allowing it to include URLs that appear inside the docs themselves.
 
-### What the script does
+## Changes (all in `telegram-bot/src/index.js`)
 
-1. **Detect OS** — abort with a clear message if not Debian/Ubuntu (so it doesn't silently break on RHEL/Alpine).
-2. **Install Node.js 20 LTS** via NodeSource — skip if `node -v` already reports ≥ 18.17.
-3. **Install pm2 globally** — skip if already installed.
-4. **`npm install`** in the script's own directory (so it works no matter where the folder was unzipped).
-5. **`.env` check** — if missing, copy from `.env.example` and stop with a message telling the user to fill in `TELEGRAM_BOT_TOKEN` and `GROQ_API_KEY`, then re-run.
-6. **Docs check** — if `DOCS_DIR` (default `./docs`) is empty, create it and stop with a message telling the user to drop `.md` files in and re-run.
-7. **Build index** — `npm run index`.
-8. **Start under pm2** — `pm2 start src/index.js --name docs-bot` (or `pm2 restart` if already running), then `pm2 save`.
-9. **Print next-steps** — how to view logs (`pm2 logs docs-bot`), how to enable boot-start (`pm2 startup`), and how to re-run after adding/editing docs.
+### 1. Update the system prompt
+- Remove the line that tells the model to cite source files (`e.g. (see: setup.md)`).
+- Add explicit rules:
+  - Never mention filenames, file paths, or that the answer comes from "documents/files/docs."
+  - If the context contains URLs (http/https), you may include them verbatim when genuinely useful to the user.
+- Tone stays the same; just swap the citation rule for a "no filenames, URLs OK" rule.
 
-### Behavior rules
+### 2. Stop sending filenames into the context block
+Currently each chunk is labeled with its filename:
 
-- **Idempotent**: re-running is safe — re-installing deps, rebuilding the index, and restarting pm2 all work cleanly.
-- **Uses `sudo` only for the Node.js + pm2 install steps**, and only if not already root. Everything else runs as the invoking user.
-- **`set -euo pipefail`** so any failure stops the script with a visible error rather than silently continuing.
-- **No assumptions about CWD** — uses `SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"` and operates relative to that.
+```js
+`[${i + 1}] ${h.entry.file}${head}\n${h.entry.text}`
+```
 
-### Files touched
+Change to label chunks by number only (and keep the heading, since headings are content-level and don't leak file structure):
 
-- **New**: `telegram-bot/bootstrap.sh` (executable, ~60 lines of bash).
-- **Edit**: `telegram-bot/README.md` — add a short "Quick bootstrap" section at the top showing:
+```js
+`[${i + 1}]${head}\n${h.entry.text}`
+```
 
-  ```bash
-  cd telegram-bot
-  chmod +x bootstrap.sh
-  ./bootstrap.sh
-  ```
+This way the model literally cannot output a filename it never saw. URLs embedded inside `h.entry.text` are untouched and remain available for the model to quote.
 
-  with a note that the script will pause and tell you what to do if `.env` or `docs/` aren't ready yet.
+### 3. No changes needed to the indexer, chunker, embeddings, or RAG search
+Filenames stay in `vectors.json` (we still need them internally for debugging and to support future features), they just aren't shown to the model anymore.
 
-No changes to the bot's runtime code, dependencies, or behavior.
+## Deployment steps for you (after I make the code change)
+
+On your VPS:
+
+```bash
+cd ~/docubot-chat
+git pull
+pm2 restart docs-bot
+pm2 logs docs-bot
+```
+
+No need to re-run `npm run index` — the vector index doesn't change, only the prompt/context formatting does.
+
+## Verification
+
+- Ask the bot a question whose answer lives in a doc that contains a URL → it should answer and include the URL, with no filename mentioned.
+- Ask a question whose answer is in a doc with no URL → it should answer cleanly, with no "(see: foo.md)" tail.
+- Ask something not in the docs → it should say it doesn't know, again without naming files.

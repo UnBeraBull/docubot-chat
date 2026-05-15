@@ -20,14 +20,15 @@ const SYSTEM_PROMPT = `You are a helpful assistant that answers questions strict
 Rules:
 - Prefer information from the CONTEXT section. If the answer isn't there, say so plainly instead of guessing.
 - Be concise and direct. Use short paragraphs or bullet lists.
-- When useful, cite the source file in parentheses, e.g. (see: setup.md).
-- If the user asks something off-topic, gently steer them back to the documentation.`;
+- Never mention filenames, file paths, or that your answer comes from documents, files, or docs. Do not reference sources by name in any form.
+- If the CONTEXT contains URLs (http:// or https://), you may include them verbatim when they are genuinely useful to the user.
+- If the user asks something off-topic, gently steer them back to the documentation without naming any source.`;
 
 function buildContextBlock(hits) {
   return hits
     .map((h, i) => {
       const head = h.entry.heading ? ` — ${h.entry.heading}` : "";
-      return `[${i + 1}] ${h.entry.file}${head}\n${h.entry.text}`;
+      return `[${i + 1}]${head}\n${h.entry.text}`;
     })
     .join("\n\n---\n\n");
 }
