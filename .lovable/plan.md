@@ -1,49 +1,92 @@
-## Goal
+## Troubleshooting plan
 
-Stop the bot from ever citing source `.md` filenames, while still allowing it to include URLs that appear inside the docs themselves.
+The reset ruled out Telegram conversation memory, so the next step is to confirm the VPS is actually running the updated bot process and updated generated index.
 
-## Changes (all in `telegram-bot/src/index.js`)
-
-### 1. Update the system prompt
-- Remove the line that tells the model to cite source files (`e.g. (see: setup.md)`).
-- Add explicit rules:
-  - Never mention filenames, file paths, or that the answer comes from "documents/files/docs."
-  - If the context contains URLs (http/https), you may include them verbatim when genuinely useful to the user.
-- Tone stays the same; just swap the citation rule for a "no filenames, URLs OK" rule.
-
-### 2. Stop sending filenames into the context block
-Currently each chunk is labeled with its filename:
-
-```js
-`[${i + 1}] ${h.entry.file}${head}\n${h.entry.text}`
-```
-
-Change to label chunks by number only (and keep the heading, since headings are content-level and don't leak file structure):
-
-```js
-`[${i + 1}]${head}\n${h.entry.text}`
-```
-
-This way the model literally cannot output a filename it never saw. URLs embedded inside `h.entry.text` are untouched and remain available for the model to quote.
-
-### 3. No changes needed to the indexer, chunker, embeddings, or RAG search
-Filenames stay in `vectors.json` (we still need them internally for debugging and to support future features), they just aren't shown to the model anymore.
-
-## Deployment steps for you (after I make the code change)
-
-On your VPS:
+### 1. Confirm the running process path
+On the VPS, run:
 
 ```bash
-cd ~/docubot-chat
-git pull
-pm2 restart docs-bot
-pm2 logs docs-bot
+pm2 describe docs-bot
 ```
 
-No need to re-run `npm run index` — the vector index doesn't change, only the prompt/context formatting does.
+Check these fields:
+- `script path`
+- `cwd`
+- `args`
 
-## Verification
+They should point to:
 
-- Ask the bot a question whose answer lives in a doc that contains a URL → it should answer and include the URL, with no filename mentioned.
-- Ask a question whose answer is in a doc with no URL → it should answer cleanly, with no "(see: foo.md)" tail.
-- Ask something not in the docs → it should say it doesn't know, again without naming files.
+```bash
+/root/docubot-chat/telegram-bot
+node src/index.js
+```
+
+If `cwd` points somewhere else, PM2 is running an old clone or old directory.
+
+### 2. Confirm the live file contains the new prompt
+On the VPS, run:
+
+```bash
+cd ~/docubot-chat/telegram-bot
+grep -n "Never mention filenames\|CONTEXT section\|see:" src/index.js
+```
+
+Expected:
+- You should see the new `Never mention filenames...` rule.
+- You should not see old wording that tells it to mention `CONTEXT section`, `see:`, or filenames.
+
+If the old wording appears, the VPS file is not actually updated despite the GitHub pull.
+
+### 3. Restart PM2 from the correct directory
+Even if `git pull` worked, restart from the bot folder:
+
+```bash
+cd ~/docubot-chat/telegram-bot
+pm2 restart docs-bot --update-env
+pm2 logs docs-bot --lines 30
+```
+
+Look for:
+
+```text
+Loading vector index...
+Loaded X chunks.
+Bot online as @...
+```
+
+### 4. Check whether the vector index itself contains filenames
+The model may be seeing filenames inside the indexed chunk text, not only in metadata. Run:
+
+```bash
+cd ~/docubot-chat/telegram-bot
+grep -RIn --include='*.json' --include='*.jsonl' --include='*.txt' "[0-9]-.*\.md\|\.md" . | head -50
+```
+
+If this shows `.md` filenames in generated index/cache files, rebuild the index after the latest sanitization changes:
+
+```bash
+npm run index
+pm2 restart docs-bot --update-env
+```
+
+Then reset Telegram again:
+
+```text
+/reset
+```
+
+### 5. Add a stronger final safeguard if it still happens
+If the running code and index are both updated but filenames still appear, the next code change should add an outbound sanitizer before `sendMessage` that removes filename-looking citations while preserving public URLs.
+
+The sanitizer should:
+- Remove references like `see: 4-what-we-are-building.md`
+- Remove standalone `.md` filenames and paths
+- Preserve `https://...` and `http://...` URLs, even when those URLs appear in the reference docs
+- Optionally regenerate or replace the reply if sanitization removes too much text
+
+### Most likely cause
+Since `/reset` did not fix it, the most likely causes are:
+1. PM2 is running a different directory/process than the one you pulled, or
+2. the local RAG index was built before the filename-hiding change and still contains filename text.
+
+Start with `pm2 describe docs-bot` and the two `grep` checks above.
